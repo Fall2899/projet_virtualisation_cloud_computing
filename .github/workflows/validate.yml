@@ -1,0 +1,53 @@
+name: Validate Project Structure
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate:
+    name: Validation du projet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v3
+
+      - name: Vérifier la présence des fichiers requis
+        run: |
+          echo "── Vérification des fichiers ──────────────────"
+          test -f Vagrantfile            && echo "✔ Vagrantfile" || (echo "✘ Vagrantfile manquant" && exit 1)
+          test -f scripts/gateway.sh     && echo "✔ scripts/gateway.sh" || (echo "✘ gateway.sh manquant" && exit 1)
+          test -f scripts/webserver.sh   && echo "✔ scripts/webserver.sh" || (echo "✘ webserver.sh manquant" && exit 1)
+          test -f scripts/dbserver.sh    && echo "✔ scripts/dbserver.sh" || (echo "✘ dbserver.sh manquant" && exit 1)
+          test -f README.md              && echo "✔ README.md" || (echo "✘ README.md manquant" && exit 1)
+
+      - name: Vérifier la syntaxe bash des scripts
+        run: |
+          echo "── Syntaxe bash ────────────────────────────────"
+          bash -n scripts/gateway.sh   && echo "✔ gateway.sh   : syntaxe OK"
+          bash -n scripts/webserver.sh && echo "✔ webserver.sh : syntaxe OK"
+          bash -n scripts/dbserver.sh  && echo "✔ dbserver.sh  : syntaxe OK"
+
+      - name: Vérifier la syntaxe du Vagrantfile (Ruby)
+        run: |
+          echo "── Syntaxe Vagrantfile ─────────────────────────"
+          ruby -c Vagrantfile && echo "✔ Vagrantfile : syntaxe Ruby OK"
+
+      - name: Vérifier les IPs dans les scripts
+        run: |
+          echo "── Vérification des adresses IP ────────────────"
+          grep -q "192.168.10.1"    scripts/gateway.sh   && echo "✔ IP LAN gateway présente"
+          grep -q "192.168.100.1"   scripts/gateway.sh   && echo "✔ IP DMZ gateway présente"
+          grep -q "192.168.10.10"   scripts/dbserver.sh  && echo "✔ IP DB présente"
+          grep -q "192.168.100.10"  scripts/webserver.sh && echo "✔ IP Web présente"
+
+      - name: Résumé
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════"
+          echo "  ✅ Toutes les vérifications passées !"
+          echo "  Projet : Architecture 3-Tiers Vagrant+VirtualBox"
+          echo "════════════════════════════════════════════════"
