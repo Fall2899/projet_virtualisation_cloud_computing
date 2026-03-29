@@ -1,0 +1,154 @@
+name: CI — Validation Architecture 3-Tiers
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 1 — Vérification de la structure du projet
+  # ════════════════════════════════════════════════════════════
+  structure:
+    name: 📁 Structure du projet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Vérifier les fichiers obligatoires
+        run: |
+          echo "════════════════════════════════════════════"
+          echo "  Vérification de la structure du projet"
+          echo "════════════════════════════════════════════"
+          ERROR=0
+          check_file() {
+            if [ -f "$1" ]; then echo "✅ $1"
+            else echo "❌ $1 — MANQUANT"; ERROR=1; fi
+          }
+          check_file "Vagrantfile"
+          check_file "README.md"
+          check_file "scripts/gateway.sh"
+          check_file "scripts/webserver.sh"
+          check_file "scripts/dbserver.sh"
+          check_file "scripts/fix-gateway.sh"
+          check_file "scripts/fix-dbserver.sh"
+          if [ $ERROR -eq 1 ]; then echo "❌ Fichiers manquants !"; exit 1; fi
+          echo "✅ Tous les fichiers sont présents !"
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 2 — Validation syntaxe Bash
+  # ════════════════════════════════════════════════════════════
+  bash-syntax:
+    name: 🔍 Syntaxe Bash
+    runs-on: ubuntu-latest
+    needs: structure
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Installer shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Vérifier la syntaxe bash
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script" && echo "✅ $script — OK" || (echo "❌ $script — ERREUR" && exit 1)
+          done
+
+      - name: Analyse ShellCheck
+        run: |
+          for script in scripts/*.sh; do
+            shellcheck --severity=error "$script" && echo "✅ $script — ShellCheck OK" || echo "⚠️  $script — Avertissements"
+          done
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 3 — Validation du Vagrantfile
+  # ════════════════════════════════════════════════════════════
+  vagrantfile:
+    name: 📦 Vagrantfile
+    runs-on: ubuntu-latest
+    needs: structure
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Syntaxe Ruby
+        run: ruby -c Vagrantfile && echo "✅ Vagrantfile syntaxe OK"
+
+      - name: Vérifier IPs et VMs
+        run: |
+          grep -q "192.168.10.1"   Vagrantfile && echo "✅ IP Gateway LAN"   || (echo "❌ Manquant" && exit 1)
+          grep -q "192.168.100.1"  Vagrantfile && echo "✅ IP Gateway DMZ"   || (echo "❌ Manquant" && exit 1)
+          grep -q "192.168.100.10" Vagrantfile && echo "✅ IP WebServer"     || (echo "❌ Manquant" && exit 1)
+          grep -q "192.168.10.10"  Vagrantfile && echo "✅ IP DBServer"      || (echo "❌ Manquant" && exit 1)
+          grep -q "lan_network"    Vagrantfile && echo "✅ Réseau LAN"       || (echo "❌ Manquant" && exit 1)
+          grep -q "dmz_network"    Vagrantfile && echo "✅ Réseau DMZ"       || (echo "❌ Manquant" && exit 1)
+          grep -q '"gateway"'      Vagrantfile && echo "✅ VM gateway"       || (echo "❌ Manquant" && exit 1)
+          grep -q '"webserver"'    Vagrantfile && echo "✅ VM webserver"     || (echo "❌ Manquant" && exit 1)
+          grep -q '"dbserver"'     Vagrantfile && echo "✅ VM dbserver"      || (echo "❌ Manquant" && exit 1)
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 4 — Validation contenu des scripts
+  # ════════════════════════════════════════════════════════════
+  scripts-content:
+    name: 🔥 Contenu des scripts
+    runs-on: ubuntu-latest
+    needs: bash-syntax
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Vérifier gateway.sh
+        run: |
+          grep -q "enp0s3"  scripts/gateway.sh && echo "✅ WAN enp0s3"       || (echo "❌ WAN incorrect" && exit 1)
+          grep -q "enp0s8"  scripts/gateway.sh && echo "✅ LAN enp0s8"       || (echo "❌ LAN incorrect" && exit 1)
+          grep -q "enp0s9"  scripts/gateway.sh && echo "✅ DMZ enp0s9"       || (echo "❌ DMZ incorrect" && exit 1)
+          grep -q "MASQUERADE"  scripts/gateway.sh && echo "✅ NAT MASQUERADE" || (echo "❌ Manquant" && exit 1)
+          grep -q "ip_forward"  scripts/gateway.sh && echo "✅ ip_forward"    || (echo "❌ Manquant" && exit 1)
+          grep -q "DNAT"        scripts/gateway.sh && echo "✅ DNAT"          || (echo "❌ Manquant" && exit 1)
+          grep -q "LOG_DROP"    scripts/gateway.sh && echo "✅ LOG_DROP"      || (echo "❌ Manquant" && exit 1)
+          grep -q "DEBIAN_FRONTEND=noninteractive" scripts/gateway.sh && echo "✅ Non-interactif" || (echo "❌ Manquant" && exit 1)
+
+      - name: Vérifier webserver.sh
+        run: |
+          grep -q "nginx"          scripts/webserver.sh && echo "✅ Nginx"          || (echo "❌ Manquant" && exit 1)
+          grep -q "nodejs"         scripts/webserver.sh && echo "✅ Node.js"        || (echo "❌ Manquant" && exit 1)
+          grep -q "enp0s8"         scripts/webserver.sh && echo "✅ Interface"      || (echo "❌ Incorrect" && exit 1)
+          grep -q "webapp.service" scripts/webserver.sh && echo "✅ Service systemd" || (echo "❌ Manquant" && exit 1)
+
+      - name: Vérifier dbserver.sh
+        run: |
+          grep -q "mysql-server"  scripts/dbserver.sh && echo "✅ MySQL"     || (echo "❌ Manquant" && exit 1)
+          grep -q "192.168.10.10" scripts/dbserver.sh && echo "✅ bind LAN"  || (echo "❌ Manquant" && exit 1)
+          grep -q "webuser"       scripts/dbserver.sh && echo "✅ webuser"   || (echo "❌ Manquant" && exit 1)
+          grep -q "appdb"         scripts/dbserver.sh && echo "✅ appdb"     || (echo "❌ Manquant" && exit 1)
+          grep -q "enp0s8"        scripts/dbserver.sh && echo "✅ Interface" || (echo "❌ Incorrect" && exit 1)
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 5 — Rapport final
+  # ════════════════════════════════════════════════════════════
+  rapport:
+    name: 📊 Rapport final
+    runs-on: ubuntu-latest
+    needs: [structure, bash-syntax, vagrantfile, scripts-content]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Résumé
+        run: |
+          echo "════════════════════════════════════════════════════════"
+          echo "  RAPPORT CI — Projet 3-Tiers Vagrant+VirtualBox"
+          echo "  Commit  : ${{ github.sha }}"
+          echo "  Branche : ${{ github.ref_name }}"
+          echo "  Date    : $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "════════════════════════════════════════════════════════"
+          echo "  VM1 — Gateway   : iptables zones WAN/LAN/DMZ"
+          echo "  VM2 — WebServer : Nginx + Node.js (192.168.100.10)"
+          echo "  VM3 — DBServer  : MySQL 8.0 (192.168.10.10)"
+          echo "════════════════════════════════════════════════════════"
+          echo "  ✅ Pipeline CI terminé !"
