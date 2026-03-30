@@ -53,6 +53,7 @@ Vagrant.configure("2") do |config|
     end
 
     gw.vm.provision "shell", path: "scripts/gateway.sh"
+    gw.vm.provision "shell", path: "scripts/fix-gateway.sh"
   end
 
   # ── VM2 — Serveur Web (Nginx + Node.js) ───────────────────
