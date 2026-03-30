@@ -22,8 +22,10 @@ echo ""
 # ── 1. Mise à jour ───────────────────────────────────────────
 info "Mise à jour des paquets..."
 apt-get update -qq
-apt-get install -y nginx curl git net-tools
-log "Paquets de base installés."
+apt-get install -y nginx curl git net-tools \
+                   mysql-client \
+                   mariadb-client
+log "Paquets de base installés (nginx, mysql-client, mariadb-client)."
 
 # ── 2. Node.js 20 LTS ────────────────────────────────────────
 info "Installation de Node.js 20 LTS..."
@@ -47,6 +49,106 @@ network:
 NETPLAN
 netplan apply 2>/dev/null || true
 log "Route LAN configurée : 192.168.10.0/24 via 192.168.100.1"
+
+# ── 4. Configuration clients MySQL / MariaDB ─────────────────
+info "Configuration des clients MySQL et MariaDB..."
+
+# Fichier de configuration pour l'utilisateur vagrant
+# Permet de se connecter sans retaper les identifiants
+cat > /home/vagrant/.my.cnf << 'MYCNF'
+[client]
+host     = 192.168.10.10
+port     = 3306
+user     = webuser
+password = WebPass123!
+database = appdb
+
+[mysql]
+host     = 192.168.10.10
+port     = 3306
+user     = webuser
+password = WebPass123!
+database = appdb
+prompt   = "VM2-web [\\d]> "
+
+[mysqldump]
+host     = 192.168.10.10
+port     = 3306
+user     = webuser
+password = WebPass123!
+MYCNF
+chmod 600 /home/vagrant/.my.cnf
+chown vagrant:vagrant /home/vagrant/.my.cnf
+
+# Même config pour root
+cp /home/vagrant/.my.cnf /root/.my.cnf
+chmod 600 /root/.my.cnf
+
+# Script utilitaire : connexion rapide à la DB
+cat > /usr/local/bin/db-connect << 'DBCONN'
+#!/bin/bash
+# Connexion rapide à MySQL depuis VM2
+echo "Connexion à MySQL — VM3 (192.168.10.10)..."
+mysql --host=192.168.10.10 --port=3306 \
+      --user=webuser --password=WebPass123! \
+      appdb "$@"
+DBCONN
+chmod +x /usr/local/bin/db-connect
+
+# Script utilitaire : tester la connexion DB
+cat > /usr/local/bin/db-test << 'DBTEST'
+#!/bin/bash
+echo "════════════════════════════════════════════"
+echo "  Test connexion DB depuis VM2 (DMZ)"
+echo "════════════════════════════════════════════"
+echo ""
+
+# Test MySQL client
+echo "→ Test mysql client..."
+mysql --host=192.168.10.10 --port=3306 \
+      --user=webuser --password=WebPass123! \
+      --connect-timeout=5 \
+      appdb -e "SELECT 'MySQL OK' AS statut, VERSION() AS version;" 2>/dev/null \
+  && echo "✅ MySQL client : connexion OK" \
+  || echo "❌ MySQL client : connexion FAIL"
+
+echo ""
+
+# Test mariadb client
+echo "→ Test mariadb client..."
+mariadb --host=192.168.10.10 --port=3306 \
+        --user=webuser --password=WebPass123! \
+        --connect-timeout=5 \
+        appdb -e "SELECT 'MariaDB client OK' AS statut;" 2>/dev/null \
+  && echo "✅ MariaDB client : connexion OK" \
+  || echo "❌ MariaDB client : connexion FAIL"
+
+echo ""
+
+# Test port réseau
+echo "→ Test port 3306..."
+nc -zv -w3 192.168.10.10 3306 2>/dev/null \
+  && echo "✅ Port 3306 : accessible" \
+  || echo "❌ Port 3306 : inaccessible"
+
+echo ""
+echo "  Commandes utiles :"
+echo "    db-connect          → console MySQL interactive"
+echo "    mysql               → utilise ~/.my.cnf automatiquement"
+echo "    mariadb             → idem avec client MariaDB"
+DBTEST
+chmod +x /usr/local/bin/db-test
+
+log "Clients MySQL et MariaDB configurés."
+log "Commandes disponibles : db-connect | db-test"
+
+# ── 3b. Test connexion MySQL depuis VM2 ──────────────────────
+info "Test de connexion MySQL vers VM3 (192.168.10.10)..."
+sleep 2
+mysql -u webuser -pWebPass123! -h 192.168.10.10 appdb \
+  -e "SELECT 'Connexion MySQL OK' AS status;" 2>/dev/null \
+  && log "Client MySQL connecté à VM3 avec succès." \
+  || warn "MySQL non joignable pour l'instant — normal si VM3 n'est pas encore prête."
 
 # ── 4. Application Node.js ───────────────────────────────────
 APP_DIR="/opt/webapp"
@@ -115,8 +217,18 @@ async function initDB() {
 
 // ── Routes ───────────────────────────────────────────────────
 
-// Page d'accueil
-app.get('/', (req, res) => {
+// Page d'accueil — aucune info sur la DB
+app.get('/', async (req, res) => {
+  // La DB est utilisée en arrière-plan (comptage membres)
+  // mais l'utilisateur ne voit aucune info sur la DB
+  let memberCount = 0;
+  try {
+    if (pool) {
+      const [rows] = await pool.query('SELECT COUNT(*) AS total FROM users');
+      memberCount = rows[0].total;
+    }
+  } catch (err) { /* silencieux — l'utilisateur ne sait pas */ }
+
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="fr">
@@ -140,22 +252,24 @@ app.get('/', (req, res) => {
     td:first-child{color:#38bdf8}
     .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
     .green{background:#22c55e}.red{background:#ef4444}
-    .links{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
-    .btn{padding:8px 16px;border-radius:6px;background:#1d4ed8;color:#fff;
-         text-decoration:none;font-size:.875rem;transition:background .2s}
-    .btn:hover{background:#2563eb}
-    .btn.outline{background:transparent;border:1px solid #475569;color:#94a3b8}
-    .btn.outline:hover{border-color:#7dd3fc;color:#7dd3fc}
-    code{background:#0f172a;padding:2px 8px;border-radius:4px;font-size:.85rem;color:#a5f3fc}
+    .stat{display:inline-block;background:#1e293b;border:1px solid #334155;
+          border-radius:10px;padding:16px 32px;margin-bottom:24px}
+    .stat-number{font-size:2rem;font-weight:700;color:#38bdf8}
+    .stat-label{font-size:.85rem;color:#64748b;margin-top:4px}
   </style>
 </head>
 <body>
 <div class="container">
-  <h1>🏗️ Architecture 3-Tiers <span class="badge">Vagrant + VirtualBox</span></h1>
+  <h1>Architecture 3-Tiers <span class="badge">Vagrant + VirtualBox</span></h1>
   <p class="subtitle">Projet de Fin de Module — Déploiement d'une architecture réseau virtualisée</p>
 
+  <div class="stat">
+    <div class="stat-number">${memberCount}</div>
+    <div class="stat-label">membres inscrits</div>
+  </div>
+
   <div class="card">
-    <h2>🖥️ Topologie réseau</h2>
+    <h2>Topologie réseau</h2>
     <table>
       <tr><th>VM</th><th>Rôle</th><th>IP</th><th>Services</th></tr>
       <tr><td>VM1 — Gateway</td><td>Firewall iptables</td><td>192.168.10.1 / 192.168.100.1</td><td>iptables, NAT, routage</td></tr>
@@ -165,7 +279,7 @@ app.get('/', (req, res) => {
   </div>
 
   <div class="card">
-    <h2>🔥 Règles Firewall (zones)</h2>
+    <h2>Règles Firewall (zones)</h2>
     <table>
       <tr><th>Source</th><th>Destination</th><th>Port</th><th>Action</th></tr>
       <tr><td>LAN</td><td>Internet (WAN)</td><td>*</td><td><span class="dot green"></span>ACCEPT + NAT</td></tr>
@@ -176,69 +290,20 @@ app.get('/', (req, res) => {
       <tr><td>WAN</td><td>LAN</td><td>*</td><td><span class="dot red"></span>DROP + LOG</td></tr>
     </table>
   </div>
-
-  <div class="card">
-    <h2>🔗 Endpoints de l'API</h2>
-    <div class="links">
-      <a class="btn" href="/health">GET /health</a>
-      <a class="btn" href="/users">GET /users</a>
-      <a class="btn outline" href="/info">GET /info</a>
-    </div>
-  </div>
 </div>
 </body>
 </html>`);
 });
 
-// Healthcheck — statut de la DB
-app.get('/health', async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status  : 'DEGRADED',
-      message : 'DB non disponible — application en mode dégradé',
-      web     : 'OK',
-      db      : 'OFFLINE',
-    });
-  }
-  try {
-    const [rows] = await pool.query(
-      'SELECT NOW() AS time, VERSION() AS mysql_version, DATABASE() AS db_name'
-    );
-    res.json({ status: 'OK', web: 'OK', db: 'OK', mysql: rows[0] });
-  } catch (err) {
-    res.status(500).json({ status: 'ERROR', error: err.message });
-  }
-});
+// Toutes les routes sensibles → 404 discret
+// Aucune info sur la DB, les erreurs ou l'infrastructure
+app.get('/health', (req, res) => res.status(404).send('Not found'));
+app.get('/users',  (req, res) => res.status(404).send('Not found'));
+app.get('/info',   (req, res) => res.status(404).send('Not found'));
 
-// Liste des utilisateurs
-app.get('/users', async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'DB non disponible' });
-  try {
-    const [rows] = await pool.query(
-      'SELECT id, username, email, role, created_at FROM users ORDER BY id'
-    );
-    res.json({ count: rows.length, users: rows });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Informations système
-app.get('/info', (req, res) => {
-  res.json({
-    hostname    : require('os').hostname(),
-    platform    : process.platform,
-    node_version: process.version,
-    uptime_sec  : Math.floor(process.uptime()),
-    memory_mb   : Math.round(process.memoryUsage().rss / 1024 / 1024),
-    db_host     : DB_CONFIG.host,
-    db_status   : pool ? 'connected' : 'disconnected',
-  });
-});
-
-// 404
+// 404 générique — aucune info technique
 app.use((req, res) => {
-  res.status(404).json({ error: 'Route non trouvée', path: req.path });
+  res.status(404).send('Not found');
 });
 
 // ── Démarrage ─────────────────────────────────────────────────
